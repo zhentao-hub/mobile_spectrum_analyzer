@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     # 使用 Ubuntu 作为构建环境
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       # 检出当前仓库代码
