@@ -34,11 +34,11 @@ jobs:
       # ⬇️ 关键：增加虚拟内存，防止编译 scipy/numpy 时内存不足
       - name: Create swap space
         run: |
-          sudo rm -f /swapfile
-          sudo dd if=/dev/zero of=/swapfile bs=1M count=6144
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          sudo swapoff -a 2>/dev/null || true
+          sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=6144
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
           free -h
 
       # 安装 Python 打包工具
