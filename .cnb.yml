@@ -1,0 +1,33 @@
+main:
+  push:
+    - name: build-android-apk
+      docker:
+        image: ubuntu:22.04
+      stages:
+        - name: install-system-deps
+          script: |
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              git zip unzip openjdk-17-jdk-headless \
+              autoconf libtool pkg-config \
+              zlib1g-dev libncurses5-dev libncursesw5-dev \
+              libtinfo5 cmake libffi-dev libssl-dev \
+              libltdl-dev libbz2-dev libsqlite3-dev \
+              libreadline-dev python3-dev python3-pip \
+              ca-certificates curl wget
+
+        - name: install-buildozer
+          script: |
+            pip3 install --break-system-packages buildozer cython virtualenv
+
+        - name: build-apk
+          script: |
+            cd mobile_spectrum_analyzer
+            buildozer android debug
+
+        - name: upload-apk
+          type: cnb/artifact
+          options:
+            name: spectrum-analyzer-apk
+            path: |
+              mobile_spectrum_analyzer/bin/*.apk
