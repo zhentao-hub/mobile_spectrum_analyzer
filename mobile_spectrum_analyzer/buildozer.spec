@@ -21,7 +21,7 @@ android.permissions = RECORD_AUDIO
 android.api = 33
 android.minapi = 21
 android.sdk = 33
-android.ndk = 25b
+android.ndk = 28c
 # 架构（只打 arm64 减小体积和加快速度）
 android.archs = arm64-v8a
 # 屏幕方向
