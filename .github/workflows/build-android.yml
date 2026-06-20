@@ -50,6 +50,9 @@ jobs:
 
       # 进入子目录并构建 Android 调试版 APK
       - name: Build APK
+        env:
+          FFLAGS: "-fallow-argument-mismatch"
+          FCFLAGS: "-fallow-argument-mismatch"
         run: |
           cd mobile_spectrum_analyzer
           buildozer android debug
