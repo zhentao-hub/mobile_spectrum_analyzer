@@ -32,6 +32,8 @@ fullscreen = 0
 android.logcat_filters = *:S python:D
 # Android 入口（包名.模块名）
 android.entrypoint = org.kivy.android.PythonActivity
+# ✅ 新增：接受 SDK 许可证
+android.accept_sdk_license = True
 
 [buildozer]
 # Buildozer日志级别
