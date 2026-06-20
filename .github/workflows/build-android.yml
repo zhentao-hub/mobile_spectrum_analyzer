@@ -29,8 +29,7 @@ jobs:
           libltdl-dev libbz2-dev libsqlite3-dev \
           libreadline-dev python3-dev python3-pip \
           ca-certificates curl wget \
-          gfortran
-
+          
       # ⬇️ 关键：增加虚拟内存，防止编译 scipy/numpy 时内存不足
       - name: Create swap space
         run: |
@@ -50,12 +49,7 @@ jobs:
 
       # 进入子目录并构建 Android 调试版 APK
       - name: Build APK
-        env:    
-          FC: /usr/bin/gfortran
-          FFLAGS: "-fallow-argument-mismatch"
-          FCFLAGS: "-fallow-argument-mismatch"
-         # 尝试阻止 CMake 自动添加 -Qunused-arguments
-          CMAKE_Fortran_FLAGS: "-fallow-argument-mismatch"
+   
         run: |
           cd mobile_spectrum_analyzer
           buildozer android debug
