@@ -16,7 +16,7 @@ requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.0,numpy==v1.26.4,au
 # 图标（可选）
 # icon.filename = %(source.dir)s/data/icon.png
 # 权限
-android.permissions = RECORD_AUDIO
+android.permissions = RECORD_AUDIO,INTERNET,WRITE_EXTERNAL_STORAGE
 # API级别
 android.api = 33
 android.minapi = 24
