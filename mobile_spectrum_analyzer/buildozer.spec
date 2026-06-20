@@ -19,7 +19,7 @@ requirements = python3,kivy==2.3.0,numpy,scipy,audiostream
 android.permissions = RECORD_AUDIO
 # API级别
 android.api = 33
-android.minapi = 21
+android.minapi = 24
 android.sdk = 33
 android.ndk = 28c
 # 架构（只打 arm64 减小体积和加快速度）
