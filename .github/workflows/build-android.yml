@@ -1,0 +1,49 @@
+name: Build Android APK
+
+# 触发条件：push 到 main 分支，或发起 PR 到 main 分支
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    # 使用 Ubuntu 作为构建环境
+    runs-on: ubuntu-latest
+
+    steps:
+      # 检出当前仓库代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 安装 Buildozer 所需的系统依赖
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk-headless \
+            autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev \
+            libtinfo5 cmake libffi-dev libssl-dev \
+            libltdl-dev libbz2-dev libsqlite3-dev \
+            libreadline-dev python3-dev python3-pip \
+            ca-certificates curl wget
+
+      # 安装 Python 打包工具
+      - name: Install Buildozer
+        run: |
+          pip3 install buildozer cython virtualenv
+
+      # 进入子目录并构建 Android 调试版 APK
+      - name: Build APK
+        run: |
+          cd mobile_spectrum_analyzer
+          buildozer android debug
+
+      # 将生成的 APK 文件上传为构建产物，方便下载
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectrum-analyzer-apk
+          path: mobile_spectrum_analyzer/bin/*.apk
