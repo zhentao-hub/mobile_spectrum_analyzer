@@ -34,7 +34,8 @@ jobs:
       # ⬇️ 关键：增加虚拟内存，防止编译 scipy/numpy 时内存不足
       - name: Create swap space
         run: |
-          sudo fallocate -l 6G /swapfile
+          sudo rm -f /swapfile
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=6144
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
