@@ -31,6 +31,15 @@ jobs:
           ca-certificates curl wget \
           gfortran
 
+      # ⬇️ 关键：增加虚拟内存，防止编译 scipy/numpy 时内存不足
+      - name: Create swap space
+        run: |
+          sudo fallocate -l 6G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       # 安装 Python 打包工具
       - name: Install Buildozer
         run: |
