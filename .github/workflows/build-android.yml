@@ -50,9 +50,12 @@ jobs:
 
       # 进入子目录并构建 Android 调试版 APK
       - name: Build APK
-        env:
+        env:    
+          FC: /usr/bin/gfortran
           FFLAGS: "-fallow-argument-mismatch"
           FCFLAGS: "-fallow-argument-mismatch"
+         # 尝试阻止 CMake 自动添加 -Qunused-arguments
+          CMAKE_Fortran_FLAGS: "-fallow-argument-mismatch"
         run: |
           cd mobile_spectrum_analyzer
           buildozer android debug
