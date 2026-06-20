@@ -22,13 +22,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git zip unzip openjdk-17-jdk-headless \
-            autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev \
-            libtinfo-dev cmake libffi-dev libssl-dev \
-            libltdl-dev libbz2-dev libsqlite3-dev \
-            libreadline-dev python3-dev python3-pip \
-            ca-certificates curl wget
+          git zip unzip openjdk-17-jdk-headless \
+          autoconf libtool pkg-config \
+          zlib1g-dev libncurses5-dev libncursesw5-dev \
+          libtinfo-dev cmake libffi-dev libssl-dev \
+          libltdl-dev libbz2-dev libsqlite3-dev \
+          libreadline-dev python3-dev python3-pip \
+          ca-certificates curl wget \
+          gfortran
 
       # 安装 Python 打包工具
       - name: Install Buildozer
