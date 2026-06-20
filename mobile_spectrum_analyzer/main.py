@@ -938,8 +938,8 @@ class SpectrumAnalyzerApp(App):
 
     def build(self):
         # Set window size for desktop only
-        if sys.platform in ('win32', 'darwin', 'linux'):
-            Window.size = (1200, 800)
+        # if sys.platform in ('win32', 'darwin', 'linux'):
+        #    Window.size = (1200, 800)
         Window.clearcolor = (0.05, 0.05, 0.05, 1)
 
         # === Android 横屏全屏修复 ===
