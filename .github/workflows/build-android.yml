@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    # 使用 Ubuntu 作为构建环境
+    # 使用 Ubuntu 22.04 作为构建环境（兼容 Buildozer）
     runs-on: ubuntu-22.04
 
     steps:
@@ -22,15 +22,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-          git zip unzip openjdk-17-jdk-headless \
-          autoconf libtool pkg-config \
-          zlib1g-dev libncurses5-dev libncursesw5-dev \
-          libtinfo-dev cmake libffi-dev libssl-dev \
-          libltdl-dev libbz2-dev libsqlite3-dev \
-          libreadline-dev python3-dev python3-pip \
-          ca-certificates curl wget \
-          
-      # ⬇️ 关键：增加虚拟内存，防止编译 scipy/numpy 时内存不足
+            git zip unzip openjdk-17-jdk-headless \
+            autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev \
+            libtinfo-dev cmake libffi-dev libssl-dev \
+            libltdl-dev libbz2-dev libsqlite3-dev \
+            libreadline-dev python3-dev python3-pip \
+            ca-certificates curl wget
+
+      # 增加虚拟内存，防止编译 scipy/numpy 时内存不足
       - name: Create swap space
         run: |
           sudo swapoff -a 2>/dev/null || true
@@ -45,17 +45,15 @@ jobs:
         run: |
           pip3 install buildozer cython virtualenv
 
-# ⬇️ 关键：确认 Java 版本并设置 JAVA_HOME（新增步骤）
+      # 设置 JAVA_HOME
       - name: Setup Java 17
         run: |
-          # 查找 Java 17 的安装路径
-          JAVA_17_PATH=$(find /usr/lib/jvm -maxdepth 1 -name "*java-17*" -o -name "*17*" | grep -v "temurin-11" | head -1)
+          JAVA_17_PATH=$(find /usr/lib/jvm -maxdepth 1 -type d \( -name '*java-17*' -o -name '*17*' \) | grep -v 'temurin-11' | head -1)
           if [ -z "$JAVA_17_PATH" ]; then
             JAVA_17_PATH="/usr/lib/jvm/java-17-openjdk-amd64"
           fi
           echo "JAVA_HOME=$JAVA_17_PATH"
           echo "JAVA_HOME=$JAVA_17_PATH" >> $GITHUB_ENV
-          # 验证
           export JAVA_HOME=$JAVA_17_PATH
           $JAVA_HOME/bin/java -version
           $JAVA_HOME/bin/javac -version
@@ -64,7 +62,6 @@ jobs:
       - name: Build APK
         env:
           JAVA_HOME: ${{ env.JAVA_HOME }}
-   
         run: |
           cd mobile_spectrum_analyzer
           buildozer android debug

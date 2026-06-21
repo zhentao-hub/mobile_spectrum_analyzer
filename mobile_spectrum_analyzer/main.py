@@ -42,7 +42,7 @@ class SpectrumCanvas(FloatLayout):
         self.peaks = []
         self.show_time_domain = False  # False=频域, True=时域
         self.log_scale = False
-        self.amp_max = 0.3  # Y轴最大幅值显示范围
+        self.amp_max = 0.5  # Y轴最大幅值显示范围
         self.paused = False  # 是否暂停
         
         # 缩放参数（仅暂停时有效）
@@ -824,8 +824,8 @@ class ControlPanel(ScrollView):
         
         # Magnitude range
         self.layout.add_widget(Label(text='Max Magnitude:', size_hint_y=None, height=dp(20), color=(0.8, 0.8, 0.8, 1)))
-        self.amp_max_slider = Slider(min=0.001, max=0.3, value=0.3, step=0.001, size_hint_y=None, height=dp(40))
-        self.amp_max_label = Label(text='0.300', size_hint_y=None, height=dp(20), color=(1, 1, 1, 1))
+        self.amp_max_slider = Slider(min=0.001, max=0.5, value=0.5, step=0.001, size_hint_y=None, height=dp(40))
+        self.amp_max_label = Label(text='0.500', size_hint_y=None, height=dp(20), color=(1, 1, 1, 1))
         self.amp_max_slider.bind(value=self.on_amp_max_change)
         self.layout.add_widget(self.amp_max_slider)
         self.layout.add_widget(self.amp_max_label)
