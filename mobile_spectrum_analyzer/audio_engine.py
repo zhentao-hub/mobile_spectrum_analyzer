@@ -87,7 +87,6 @@ class AudioSpectrumEngine:
         self._capture_thread = None
         self._stream = None
 
-        # Android AudioRecord 相关
         self._audio_record = None
         self._record_thread = None
         self._is_android = False
@@ -248,7 +247,6 @@ class AudioSpectrumEngine:
             AudioSource = autoclass('android.media.MediaRecorder$AudioSource')
             AudioFormat = autoclass('android.media.AudioFormat')
 
-            # 计算最小缓冲区大小
             min_buffer_size = AudioRecord.getMinBufferSize(
                 self.samplerate,
                 AudioFormat.CHANNEL_IN_MONO,
@@ -260,10 +258,8 @@ class AudioSpectrumEngine:
                 self.is_running = False
                 return
 
-            # 使用更大的缓冲区避免欠载
             buffer_size = max(min_buffer_size, self.blocksize * 2)
 
-            # 创建AudioRecord实例
             self._audio_record = AudioRecord(
                 AudioSource.MIC,
                 self.samplerate,
@@ -272,7 +268,6 @@ class AudioSpectrumEngine:
                 buffer_size
             )
 
-            # 检查初始化状态
             if self._audio_record.getState() != AudioRecord.STATE_INITIALIZED:
                 print("[音频引擎] AudioRecord 初始化失败，请检查麦克风权限")
                 self._audio_record.release()
@@ -280,11 +275,9 @@ class AudioSpectrumEngine:
                 self.is_running = False
                 return
 
-            # 开始录音
             self._audio_record.startRecording()
             print(f"[音频引擎] Android AudioRecord 已启动，采样率: {self.samplerate}")
 
-            # 启动采集线程
             self._record_thread = threading.Thread(
                 target=self._android_record_loop,
                 args=(buffer_size, stream_callback),
@@ -299,24 +292,25 @@ class AudioSpectrumEngine:
             self.is_running = False
 
     def _android_record_loop(self, buffer_size, stream_callback=None):
-        """Android音频采集线程"""
+        """Android音频采集线程 - 修复：暂停时不退出线程"""
         try:
             from jnius import JavaException
+            import time
 
-            # 创建字节缓冲区
             audio_buffer = bytearray(buffer_size)
 
-            while self.is_running and not self.is_paused:
+            while self.is_running:
+                if self.is_paused:
+                    time.sleep(0.05)
+                    continue
+
                 try:
-                    # 读取音频数据
                     bytes_read = self._audio_record.read(audio_buffer, 0, buffer_size)
 
                     if bytes_read > 0:
-                        # 转换为numpy数组 (16位PCM)
                         audio_data = np.frombuffer(bytes(audio_buffer[:bytes_read]), dtype=np.int16)
                         audio_data = audio_data.astype(np.float32) / 32768.0
 
-                        # 处理音频
                         self.process_audio(audio_data)
 
                         if stream_callback:
@@ -376,7 +370,6 @@ class AudioSpectrumEngine:
         """停止音频采集"""
         self.is_running = False
 
-        # 停止Android AudioRecord
         if self._audio_record:
             try:
                 self._audio_record.stop()
@@ -385,11 +378,9 @@ class AudioSpectrumEngine:
                 pass
             self._audio_record = None
 
-        # 等待采集线程结束
         if self._record_thread and self._record_thread.is_alive():
             self._record_thread.join(timeout=1.0)
 
-        # 停止PyAudio
         if self._stream:
             try:
                 self._stream.stop_stream()
