@@ -1,6 +1,11 @@
 """
 Mobile Spectrum Analyzer - Kivy Version
 Supports real-time microphone capture + FFT spectrum display
+
+[修复] on_pause 取消 Clock 定时器，停止后台 UI 重绘
+[修复] on_resume 重新创建 Clock 定时器
+[修复] pause_capture 降低刷新率到 5 FPS，resume_capture 恢复 30 FPS
+[修复] update_display 暂停时跳过 FFT 计算和重绘
 """
 import os
 import sys
@@ -853,6 +858,10 @@ class InfoPanel(BoxLayout):
 class SpectrumAnalyzerApp(App):
     """主应用类"""
 
+    # [修复] 定义常量，避免魔法数字
+    FPS_ACTIVE = 30       # 正常采集时刷新率
+    FPS_PAUSED = 5        # 用户手动暂停时刷新率（仅用于交互响应）
+
     def build(self):
         Window.clearcolor = (0.05, 0.05, 0.05, 1)
 
@@ -918,7 +927,8 @@ class SpectrumAnalyzerApp(App):
 
                 if self.update_event:
                     self.update_event.cancel()
-                self.update_event = Clock.schedule_interval(self.update_display, 1.0 / 30.0)
+                # [修复] 使用常量
+                self.update_event = Clock.schedule_interval(self.update_display, 1.0 / self.FPS_ACTIVE)
 
         Clock.schedule_once(check_startup, 0.5)
 
@@ -930,20 +940,34 @@ class SpectrumAnalyzerApp(App):
             self.update_event = None
 
     def pause_capture(self):
+        """[修复] 用户手动暂停 — 暂停音频引擎 + 降低刷新率到 5 FPS"""
         self.engine.pause()
         self.spectrum_canvas.paused = True
         self.info_panel.update_status('Paused (scroll to zoom)')
+        # 降低刷新率：暂停时不需要 30 FPS，5 FPS 足够交互响应
+        if self.update_event:
+            self.update_event.cancel()
+        self.update_event = Clock.schedule_interval(self.update_display, 1.0 / self.FPS_PAUSED)
 
     def resume_capture(self):
+        """[修复] 用户手动恢复 — 恢复音频引擎 + 恢复 30 FPS"""
         self.engine.resume()
         self.spectrum_canvas.paused = False
         self.spectrum_canvas.zoom_start = 0.0
         self.spectrum_canvas.zoom_end = 1.0
         self.spectrum_canvas.draw()
         self.info_panel.update_status('Capturing')
+        # 恢复正常刷新率
+        if self.update_event:
+            self.update_event.cancel()
+        self.update_event = Clock.schedule_interval(self.update_display, 1.0 / self.FPS_ACTIVE)
 
     def update_display(self, dt):
         try:
+            # [修复] 画布暂停时跳过所有 FFT 计算和重绘，只保留最小化的交互响应
+            if self.spectrum_canvas.paused:
+                return
+
             freqs, magnitude, time_data = self.engine.get_latest_data()
 
             if freqs is not None and magnitude is not None and len(freqs) > 0:
@@ -1007,18 +1031,25 @@ class SpectrumAnalyzerApp(App):
             self.spectrum_canvas._update_canvas()
 
     def on_pause(self):
-        """应用切换到后台（Android home键/多任务切换）时自动暂停采集，防止后台耗电"""
+        """[修复] 应用切换到后台 — 暂停音频 + 取消 Clock 定时器，彻底停止 UI 重绘"""
         self._was_running_before_pause = self.engine.is_running and not self.engine.is_paused
         if self._was_running_before_pause:
             print("[生命周期] App 进入后台，自动暂停音频采集")
             self.pause_capture()
+        # 关键修复：取消 Clock 定时器，后台不再做任何 UI 刷新
+        if self.update_event:
+            self.update_event.cancel()
+            self.update_event = None
         return True
 
     def on_resume(self):
-        """应用回到前台时自动恢复采集"""
+        """[修复] 应用回到前台 — 恢复音频 + 重新创建 Clock 定时器"""
         if getattr(self, '_was_running_before_pause', False):
             print("[生命周期] App 回到前台，自动恢复音频采集")
             self.resume_capture()
+            # 关键修复：重新启动 Clock 定时器
+            if not self.update_event:
+                self.update_event = Clock.schedule_interval(self.update_display, 1.0 / self.FPS_ACTIVE)
 
     def on_stop(self):
         """应用被系统终止时彻底释放资源"""
