@@ -1,6 +1,10 @@
 """
 音频采集与FFT处理引擎 - Android修复版
 使用pyjnius调用Android原生AudioRecord API
+
+[修复] pause/resume 真正 stop/start AudioRecord，避免后台麦克风硬件持续耗电
+[修复] 采集线程用 threading.Event 替代 sleep 轮询，暂停时不消耗 CPU
+[修复] stop_capture 增加 release() 调用，确保硬件资源释放
 """
 import numpy as np
 import threading
@@ -95,6 +99,10 @@ class AudioSpectrumEngine:
             self._is_android = True
         except ImportError:
             pass
+
+        # [修复] 用 Event 替代 sleep 轮询，暂停时线程真正阻塞
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # set = 非暂停; clear = 暂停
 
     def _get_window(self, size, window_type):
         key = (size, window_type)
@@ -229,6 +237,7 @@ class AudioSpectrumEngine:
         """开始音频采集"""
         self.is_running = True
         self.is_paused = False
+        self._pause_event.set()
         self._start_audio_stream(stream_callback)
 
     def _start_audio_stream(self, stream_callback=None):
@@ -292,7 +301,7 @@ class AudioSpectrumEngine:
             self.is_running = False
 
     def _android_record_loop(self, buffer_size, stream_callback=None):
-        """Android音频采集线程 - 修复：暂停时不退出线程"""
+        """Android音频采集线程 - [修复] 用 Event 替代 sleep 轮询"""
         try:
             from jnius import JavaException
             import time
@@ -300,9 +309,14 @@ class AudioSpectrumEngine:
             audio_buffer = bytearray(buffer_size)
 
             while self.is_running:
-                if self.is_paused:
-                    time.sleep(0.05)
+                # [修复] 用 Event.wait 替代 sleep(0.05) 轮询
+                # 暂停时线程真正阻塞，不消耗 CPU，不阻止系统休眠
+                if not self._pause_event.wait(timeout=1.0):
+                    # 1 秒内没收到恢复信号，继续等待
                     continue
+
+                if not self.is_running:
+                    break
 
                 try:
                     bytes_read = self._audio_record.read(audio_buffer, 0, buffer_size)
@@ -369,17 +383,24 @@ class AudioSpectrumEngine:
     def stop_capture(self):
         """停止音频采集"""
         self.is_running = False
+        # [修复] 唤醒可能阻塞在 Event.wait 上的线程
+        self._pause_event.set()
 
+        # [修复] 先 join 线程，再释放 AudioRecord（避免线程还在 read 时被 release）
+        if self._record_thread and self._record_thread.is_alive():
+            self._record_thread.join(timeout=3.0)
+
+        # [修复] 确保同时调用 stop() 和 release()
         if self._audio_record:
             try:
                 self._audio_record.stop()
+            except:
+                pass
+            try:
                 self._audio_record.release()
             except:
                 pass
             self._audio_record = None
-
-        if self._record_thread and self._record_thread.is_alive():
-            self._record_thread.join(timeout=1.0)
 
         if self._stream:
             try:
@@ -397,10 +418,37 @@ class AudioSpectrumEngine:
             self._pa = None
 
     def pause(self):
+        """[修复] 暂停采集 — 真正停止 AudioRecord 硬件，不仅设标志位"""
         self.is_paused = True
+        self._pause_event.clear()
+
+        # 停止 Android AudioRecord 硬件，释放麦克风供电
+        if self._is_android and self._audio_record:
+            try:
+                self._audio_record.stop()
+                print("[音频引擎] AudioRecord 已停止（暂停），麦克风硬件已释放")
+            except Exception as e:
+                print(f"[音频引擎] 暂停时 stop 失败: {e}")
 
     def resume(self):
+        """[修复] 恢复采集 — 重新启动 AudioRecord 硬件"""
         self.is_paused = False
+        self._pause_event.set()
+
+        # 重新启动 Android AudioRecord
+        if self._is_android and self._audio_record:
+            try:
+                self._audio_record.startRecording()
+                print("[音频引擎] AudioRecord 已恢复录音")
+            except Exception as e:
+                print(f"[音频引擎] 恢复时 startRecording 失败: {e}")
+                # 如果重启失败，尝试完全重新初始化
+                try:
+                    self._audio_record.release()
+                except:
+                    pass
+                self._audio_record = None
+                self._start_android_audio()
 
     def get_latest_data(self):
         """获取最新的频谱数据（线程安全）"""
