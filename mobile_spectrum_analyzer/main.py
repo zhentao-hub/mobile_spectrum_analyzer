@@ -753,6 +753,73 @@ class ControlPanel(ScrollView):
         self.layout.add_widget(self.amp_max_slider)
         self.layout.add_widget(self.amp_max_label)
 
+        # ---- 敲击测试 (Impact Test) ----
+        self.layout.add_widget(Label(
+            text='[b]Impact Test[/b]',
+            markup=True,
+            size_hint_y=None,
+            height=dp(30),
+            color=(1, 1, 1, 1)
+        ))
+
+        self.impact_btn = ToggleButton(
+            text='Arm Impact: OFF',
+            size_hint_y=None,
+            height=dp(45),
+            background_color=(0.25, 0.45, 0.75, 1),
+            color=(1, 1, 1, 1)
+        )
+        self.impact_btn.bind(on_press=self.on_impact_toggle)
+        self.layout.add_widget(self.impact_btn)
+
+        self.layout.add_widget(Label(
+            text='Arm, then tap the object',
+            font_size='11sp',
+            size_hint_y=None,
+            height=dp(20),
+            color=(0.7, 0.7, 0.7, 1)
+        ))
+
+        self.layout.add_widget(Label(
+            text='Impact Sensitivity:',
+            size_hint_y=None,
+            height=dp(20),
+            color=(0.8, 0.8, 0.8, 1)
+        ))
+        self.impact_sens_slider = Slider(min=1, max=10, value=5, step=1, size_hint_y=None, height=dp(40))
+        self.impact_sens_label = Label(text='5', size_hint_y=None, height=dp(20), color=(1, 1, 1, 1))
+        self.impact_sens_slider.bind(value=self.on_impact_sens_change)
+        self.layout.add_widget(self.impact_sens_slider)
+        self.layout.add_widget(self.impact_sens_label)
+
+        self.impact_result_label = Label(
+            text='No impact captured yet',
+            markup=True,
+            font_size='11sp',
+            size_hint_y=None,
+            height=dp(110),
+            color=(1, 1, 1, 1),
+            halign='left',
+            valign='top',
+            text_size=(dp(250), None)
+        )
+        self.layout.add_widget(self.impact_result_label)
+
+        impact_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(40), spacing=dp(8))
+        self.impact_back_btn = Button(
+            text='Back to Live',
+            font_size='13sp',
+            on_press=lambda x: self.app_ref.exit_impact_view()
+        )
+        self.impact_clear_btn = Button(
+            text='Clear',
+            font_size='13sp',
+            on_press=lambda x: self.app_ref.clear_impact_results()
+        )
+        impact_row.add_widget(self.impact_back_btn)
+        impact_row.add_widget(self.impact_clear_btn)
+        self.layout.add_widget(impact_row)
+
         self.layout.add_widget(Label())
 
     def on_start(self, instance):
@@ -809,6 +876,22 @@ class ControlPanel(ScrollView):
     def on_amp_max_change(self, instance, value):
         self.amp_max_label.text = f'{value:.3f}'
         self.app_ref.set_amp_max(value)
+
+    def on_impact_toggle(self, instance):
+        enabled = instance.state == 'down'
+        instance.text = 'Arm Impact: ON' if enabled else 'Arm Impact: OFF'
+        self.app_ref.set_impact_mode(enabled)
+
+    def on_impact_sens_change(self, instance, value):
+        self.impact_sens_label.text = str(int(value))
+        self.app_ref.set_impact_sensitivity(int(value))
+
+    def update_impact_result(self, text):
+        self.impact_result_label.text = text
+
+    def reset_impact_ui(self):
+        self.impact_btn.state = 'normal'
+        self.impact_btn.text = 'Arm Impact: OFF'
 
 
 class InfoPanel(BoxLayout):
@@ -904,6 +987,11 @@ class SpectrumAnalyzerApp(App):
         # 后台暂停标志
         self._was_running_before_pause = False
 
+        # 敲击测试状态
+        self.impact_view = False
+        self.impact_taps = []
+        self.impact_count = 0
+
         return self.root_layout
 
     def start_capture(self):
@@ -912,6 +1000,7 @@ class SpectrumAnalyzerApp(App):
         self.spectrum_canvas.zoom_start = 0.0
         self.spectrum_canvas.zoom_end = 1.0
         self.spectrum_canvas.paused = False
+        self.impact_view = False
 
         print("[调试] 开始启动音频采集...")
 
@@ -930,9 +1019,16 @@ class SpectrumAnalyzerApp(App):
                 # [修复] 使用常量
                 self.update_event = Clock.schedule_interval(self.update_display, 1.0 / self.FPS_ACTIVE)
 
+                if self.engine.impact_mode:
+                    self.info_panel.update_status('Impact: tap the object')
+
         Clock.schedule_once(check_startup, 0.5)
 
     def stop_capture(self):
+        if self.engine.impact_mode:
+            self.engine.set_impact_detection(False)
+            self.control_panel.reset_impact_ui()
+        self.impact_view = False
         self.engine.stop_capture()
         self.info_panel.update_status('Stopped')
         if self.update_event:
@@ -952,11 +1048,14 @@ class SpectrumAnalyzerApp(App):
     def resume_capture(self):
         """[修复] 用户手动恢复 — 恢复音频引擎 + 恢复 30 FPS"""
         self.engine.resume()
+        self.impact_view = False
         self.spectrum_canvas.paused = False
         self.spectrum_canvas.zoom_start = 0.0
         self.spectrum_canvas.zoom_end = 1.0
         self.spectrum_canvas.draw()
-        self.info_panel.update_status('Capturing')
+        self.info_panel.update_status(
+            'Impact: tap the object' if self.engine.impact_mode else 'Capturing'
+        )
         # 恢复正常刷新率
         if self.update_event:
             self.update_event.cancel()
@@ -964,6 +1063,13 @@ class SpectrumAnalyzerApp(App):
 
     def update_display(self, dt):
         try:
+            # 敲击结果优先处理：即使画布处于回看/暂停状态也要接收新结果
+            self._poll_impact()
+
+            # 敲击频谱回看中：保持画面不动，等待用户点击 Back to Live
+            if self.impact_view:
+                return
+
             # [修复] 画布暂停时跳过所有 FFT 计算和重绘，只保留最小化的交互响应
             if self.spectrum_canvas.paused:
                 return
@@ -1022,6 +1128,151 @@ class SpectrumAnalyzerApp(App):
         self.engine.amp_max = amp_max
         self.spectrum_canvas.amp_max = amp_max
         self.spectrum_canvas.draw()
+
+    # ------------------------------------------------------------------
+    # 敲击测试
+    # ------------------------------------------------------------------
+
+    def set_impact_mode(self, enabled):
+        if enabled:
+            # 未采集时自动启动，方便手机端一键进入测试
+            auto_started = not self.engine.is_running or self.engine.is_paused
+            if auto_started:
+                if self.engine.is_paused:
+                    self.resume_capture()
+                else:
+                    self.start_capture()
+            self.impact_view = False
+            self.spectrum_canvas.paused = False
+            self.spectrum_canvas.zoom_start = 0.0
+            self.spectrum_canvas.zoom_end = 1.0
+            self.engine.set_impact_detection(True)
+            self.info_panel.update_status('Impact: tap the object')
+            if auto_started:
+                self.control_panel.start_btn.disabled = True
+                self.control_panel.stop_btn.disabled = False
+                self.control_panel.pause_btn.disabled = False
+            if self.update_event:
+                self.update_event.cancel()
+            self.update_event = Clock.schedule_interval(self.update_display, 1.0 / self.FPS_ACTIVE)
+            print("[敲击] 已布防，敲击被测物体即可分析")
+        else:
+            self.engine.set_impact_detection(False)
+            self.impact_view = False
+            if self.engine.is_running and not self.engine.is_paused:
+                self.spectrum_canvas.paused = False
+                self.spectrum_canvas.zoom_start = 0.0
+                self.spectrum_canvas.zoom_end = 1.0
+                self.spectrum_canvas.draw()
+                self.info_panel.update_status('Capturing')
+            print("[敲击] 已退出敲击测试")
+
+    def set_impact_sensitivity(self, value):
+        self.engine.set_impact_sensitivity(value)
+
+    def clear_impact_results(self):
+        self.impact_taps = []
+        self.impact_count = 0
+        self.control_panel.update_impact_result('No impact captured yet')
+        print("[敲击] 已清空历史结果")
+
+    def exit_impact_view(self):
+        self.impact_view = False
+        if self.engine.is_running and not self.engine.is_paused:
+            self.spectrum_canvas.paused = False
+            self.spectrum_canvas.zoom_start = 0.0
+            self.spectrum_canvas.zoom_end = 1.0
+            self.spectrum_canvas.draw()
+            self.info_panel.update_status(
+                'Impact: tap the object' if self.engine.impact_mode else 'Capturing'
+            )
+
+    def _poll_impact(self):
+        """检查引擎是否完成了新的敲击采集，并完成频谱分析"""
+        waveform = self.engine.take_impact_waveform()
+        if waveform is None:
+            return
+
+        print(f"[敲击] 采集完成，样本数: {len(waveform)}")
+        result = self.engine.analyze_impact(waveform)
+        if not result or not result['modes']:
+            self.info_panel.update_status('Impact: no clear mode')
+            print("[敲击] 未检测到明显模态")
+            return
+
+        self.impact_count += 1
+        self.impact_taps.append(result['modes'])
+        self._show_impact_result(result)
+        self._refresh_impact_summary(result)
+
+    def _show_impact_result(self, result):
+        """在频谱画布上回看敲击响应的频谱"""
+        freqs = result['freqs']
+        mag = result['magnitude']
+        peaks = result['modes']
+        if self.spectrum_canvas.log_scale:
+            mag = 20.0 * np.log10(np.maximum(mag, 1e-10))
+            peaks = [(f, 20.0 * np.log10(max(a, 1e-10))) for f, a in result['modes']]
+
+        # 强制切回频域视图，便于查看敲击频谱
+        self.spectrum_canvas.show_time_domain = False
+        self.control_panel.freq_mode_btn.state = 'down'
+        self.control_panel.time_mode_btn.state = 'normal'
+
+        self.spectrum_canvas.paused = True
+        self.spectrum_canvas.zoom_start = 0.0
+        self.spectrum_canvas.zoom_end = 1.0
+        self.spectrum_canvas.update_data(freqs, mag, None, peaks)
+        self.impact_view = True
+        self.info_panel.update_status(f'Impact #{self.impact_count} (Back to Live)')
+
+    def _refresh_impact_summary(self, result):
+        modes = result['modes']
+        mode_text = ', '.join(f'{f:.0f}' for f, _amp in modes)
+        dom_f, dom_a = result['dominant']
+        dom_db = 20.0 * np.log10(max(dom_a, 1e-9))
+
+        lines = [
+            f'[b]#{self.impact_count}[/b] Modes: {mode_text} Hz',
+            f'Dominant: {dom_f:.0f} Hz ({dom_db:.0f} dB)',
+        ]
+
+        clusters = self._cluster_modes(self.impact_taps)
+        if clusters:
+            avg = ' | '.join(
+                f"{c['mean']:.0f}Hz(n={c['n']},±{c['std']:.1f})" for c in clusters[:4]
+            )
+            lines.append(f'[color=#88ff88]Avg: {avg}[/color]')
+
+        self.control_panel.update_impact_result('\n'.join(lines))
+
+    @staticmethod
+    def _cluster_modes(taps):
+        """把多次敲击检测到的模态按频率聚类，用于求平均固有频率"""
+        clusters = []
+        for modes in taps:
+            for freq, _amp in sorted(modes, key=lambda m: m[0]):
+                target = None
+                for cluster in clusters:
+                    if abs(freq - cluster['mean']) <= max(5.0, cluster['mean'] * 0.05):
+                        target = cluster
+                        break
+                if target is None:
+                    clusters.append({'values': [freq], 'mean': freq})
+                else:
+                    target['values'].append(freq)
+                    target['mean'] = float(np.mean(target['values']))
+
+        result = []
+        for cluster in clusters:
+            values = np.asarray(cluster['values'], dtype=np.float64)
+            result.append({
+                'mean': float(np.mean(values)),
+                'std': float(np.std(values)),
+                'n': len(values),
+            })
+        result.sort(key=lambda c: c['mean'])
+        return result
 
     def _on_window_resize(self, window, width, height):
         print(f"[窗口] 尺寸变化: {width}x{height}")

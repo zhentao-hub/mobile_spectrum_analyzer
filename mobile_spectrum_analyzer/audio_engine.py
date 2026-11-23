@@ -9,6 +9,7 @@
 import numpy as np
 import threading
 import queue
+import time
 from collections import deque
 
 
@@ -80,6 +81,27 @@ class AudioSpectrumEngine:
 
         self.spectrum_avg = False
         self._spectrum_buffer = deque(maxlen=10)
+
+        # ---- 敲击(冲击)测试 ----
+        # 敲击后的一段自由衰减响应包含系统的固有频率信息
+        self.impact_mode = False
+        self.impact_pre_sec = 0.05          # 触发前保留的音频长度
+        self.impact_post_sec = 1.0          # 触发后采集时长（越长频率分辨率越高）
+        self.impact_sensitivity = 5         # 触发灵敏度 1(低) ~ 10(高)
+        self.impact_min_peak = 0.012        # 绝对触发门限（归一化幅度）
+        self.impact_refractory_sec = 0.3    # 一次采集结束后的冷却时间
+        self.impact_max_modes = 5           # 最多报告的模态数量
+        self.impact_fmin = 20.0             # 分析下限，避开直流/工频
+
+        self._impact_state = 'idle'         # idle / capturing / cooldown
+        self._impact_prebuffer = deque(maxlen=int(samplerate * self.impact_pre_sec))
+        self._impact_capture_blocks = []
+        self._impact_capture_samples = 0
+        self._impact_needed_samples = 0
+        self._impact_ready_waveform = None
+        self._impact_last_trigger = 0.0
+        self._impact_noise_floor = 0.002
+        self._impact_lock = threading.Lock()
 
         self._window_cache = {}
 
@@ -176,6 +198,8 @@ class AudioSpectrumEngine:
         if len(audio_data.shape) > 1:
             audio_data = audio_data[:, 0]
 
+        self._process_impact(audio_data)
+
         self._audio_buffer.extend(audio_data)
 
         buffer_data = np.array(list(self._audio_buffer)[-self.fft_size:])
@@ -232,6 +256,193 @@ class AudioSpectrumEngine:
 
         top_indices = peaks[np.argsort(magnitude[peaks])[-self.peak_count:]]
         return [(freqs[idx], magnitude[idx]) for idx in top_indices]
+
+    # ------------------------------------------------------------------
+    # 敲击(冲击)测试：检测敲击 -> 截取自由衰减响应 -> 提取固有频率
+    # ------------------------------------------------------------------
+
+    def set_impact_detection(self, enabled):
+        """开启/关闭敲击检测，并清空上一次的采集状态"""
+        with self._impact_lock:
+            self.impact_mode = bool(enabled)
+            self._impact_state = 'idle'
+            self._impact_prebuffer.clear()
+            self._impact_capture_blocks = []
+            self._impact_capture_samples = 0
+            self._impact_ready_waveform = None
+            self._impact_noise_floor = 0.002
+
+    def set_impact_sensitivity(self, value):
+        """触发灵敏度：1 最迟钝（抗误触发），10 最灵敏（可检测轻敲）"""
+        self.impact_sensitivity = max(1, min(10, int(value)))
+
+    def _impact_trigger_factor(self):
+        # 灵敏度映射为噪声底的倍数：2x ~ 20x
+        return 2.0 + (10 - max(1, min(10, int(self.impact_sensitivity)))) * 2.0
+
+    def take_impact_waveform(self):
+        """取出一次已采集完成的冲击响应（取走后清空），由 UI 线程调用"""
+        with self._impact_lock:
+            waveform = self._impact_ready_waveform
+            self._impact_ready_waveform = None
+            return waveform
+
+    def _reset_impact_capture(self):
+        with self._impact_lock:
+            self._impact_state = 'idle'
+            self._impact_capture_blocks = []
+            self._impact_capture_samples = 0
+            self._impact_ready_waveform = None
+
+    def _process_impact(self, block):
+        """
+        在音频线程中运行：检测敲击起始点并截取响应。
+        只做触发/缓存，不做 FFT，避免阻塞音频采集。
+        """
+        if not self.impact_mode or len(block) == 0:
+            return
+
+        if block.ndim > 1:
+            block = block[:, 0]
+
+        block = np.asarray(block, dtype=np.float32)
+        peak = float(np.max(np.abs(block)))
+        rms = float(np.sqrt(np.mean(block * block)))
+        now = time.monotonic()
+
+        with self._impact_lock:
+            state = self._impact_state
+
+            if state == 'cooldown':
+                if now - self._impact_last_trigger < self.impact_refractory_sec:
+                    return
+                state = 'idle'
+                self._impact_state = 'idle'
+
+            if state == 'capturing':
+                self._impact_capture_blocks.append(block.copy())
+                self._impact_capture_samples += len(block)
+                if self._impact_capture_samples >= self._impact_needed_samples:
+                    self._impact_ready_waveform = np.concatenate(self._impact_capture_blocks)
+                    self._impact_capture_blocks = []
+                    self._impact_capture_samples = 0
+                    self._impact_last_trigger = now
+                    self._impact_state = 'cooldown'
+                return
+
+            # idle：跟踪环境噪声底（快降慢升），避免敲击本身抬高门限
+            if rms < self._impact_noise_floor:
+                self._impact_noise_floor += 0.2 * (rms - self._impact_noise_floor)
+            else:
+                self._impact_noise_floor += 0.005 * (rms - self._impact_noise_floor)
+            self._impact_noise_floor = max(self._impact_noise_floor, 1e-5)
+
+            threshold = max(
+                self.impact_min_peak,
+                self._impact_noise_floor * self._impact_trigger_factor()
+            )
+
+            if peak < threshold:
+                self._impact_prebuffer.extend(block)
+                return
+
+            # 触发：保留触发前的一小段 + 当前块
+            pre = np.fromiter(self._impact_prebuffer, dtype=np.float32,
+                              count=len(self._impact_prebuffer))
+            self._impact_prebuffer.clear()
+            self._impact_capture_blocks = [pre, block.copy()] if len(pre) else [block.copy()]
+            self._impact_capture_samples = len(pre) + len(block)
+            self._impact_needed_samples = int(self.samplerate * self.impact_post_sec)
+            self._impact_state = 'capturing'
+            print(f"[敲击] 检测到冲击 (触发峰值 {peak:.3f}, 门限 {threshold:.3f})")
+
+    def analyze_impact(self, waveform):
+        """
+        分析冲击响应（纯 numpy）：
+        Hann 窗 + 4 倍零填充 FFT + 对数抛物线插值细化峰值。
+        """
+        if waveform is None or len(waveform) < 512:
+            return None
+
+        x = np.asarray(waveform, dtype=np.float64)
+        x = x - np.mean(x)
+        sr = float(self.samplerate)
+        n = len(x)
+
+        window = np.hanning(n)
+        wsum = float(np.sum(window))
+        if wsum <= 0:
+            return None
+
+        nfft = 1 << int(np.ceil(np.log2(max(n * 4, 8192))))
+        spectrum = np.abs(np.fft.rfft(x * window, nfft)) * 2.0 / wsum
+        freqs = np.fft.rfftfreq(nfft, 1.0 / sr)
+        df = sr / float(nfft)
+
+        f_min = self.impact_fmin
+        f_max = min(float(self.freq_max) if self.freq_max > 0 else sr / 2.0, sr / 2.0)
+        if f_max <= f_min:
+            f_max = sr / 2.0
+
+        band = (freqs >= f_min) & (freqs <= f_max)
+        if not np.any(band):
+            return None
+
+        band_idx = np.where(band)[0]
+        band_spec = spectrum[band_idx]
+        max_amp = float(np.max(band_spec))
+        if max_amp < 1e-9:
+            return None
+
+        left = band_spec[1:-1] > band_spec[:-2]
+        right = band_spec[1:-1] > band_spec[2:]
+        candidates = band_idx[1:-1][left & right]
+        candidates = candidates[spectrum[candidates] >= max_amp * 0.02]
+        if len(candidates) > 2000:
+            candidates = candidates[np.argsort(spectrum[candidates])[-2000:]]
+        if len(candidates) == 0:
+            return None
+
+        # 按幅度从大到小贪心保留，峰值间隔至少 ~4Hz，避免毛刺
+        min_sep = max(1, int(round(4.0 / df)))
+        kept = []
+        for idx in candidates[np.argsort(spectrum[candidates])[::-1]]:
+            if all(abs(int(idx) - k) >= min_sep for k in kept):
+                kept.append(int(idx))
+                if len(kept) >= self.impact_max_modes * 4:
+                    break
+        kept.sort()
+
+        modes = []
+        for i in kept:
+            if i <= 0 or i >= len(spectrum) - 1:
+                continue
+            y0 = np.log(spectrum[i - 1] + 1e-15)
+            y1 = np.log(spectrum[i] + 1e-15)
+            y2 = np.log(spectrum[i + 1] + 1e-15)
+            denom = y0 - 2.0 * y1 + y2
+            delta = 0.0 if abs(denom) < 1e-12 else 0.5 * (y0 - y2) / denom
+            delta = max(-0.5, min(0.5, delta))
+            f_ref = float(freqs[i] + delta * df)
+            if f_ref < f_min or f_ref > f_max:
+                continue
+            amp_ref = float(np.exp(y1 - 0.25 * (y0 - y2) * delta))
+            modes.append((f_ref, amp_ref))
+
+        if not modes:
+            return None
+
+        modes.sort(key=lambda m: m[1], reverse=True)
+        dominant = modes[0]
+        modes = sorted(modes[:self.impact_max_modes], key=lambda m: m[0])
+
+        return {
+            'freqs': freqs,
+            'magnitude': spectrum,
+            'modes': modes,
+            'dominant': dominant,
+            'duration': n / sr,
+        }
 
     def start_capture(self, stream_callback=None):
         """开始音频采集"""
@@ -385,6 +596,8 @@ class AudioSpectrumEngine:
         self.is_running = False
         # [修复] 唤醒可能阻塞在 Event.wait 上的线程
         self._pause_event.set()
+        # 丢弃未完成的敲击采集
+        self._reset_impact_capture()
 
         # [修复] 先 join 线程，再释放 AudioRecord（避免线程还在 read 时被 release）
         if self._record_thread and self._record_thread.is_alive():
@@ -421,6 +634,8 @@ class AudioSpectrumEngine:
         """[修复] 暂停采集 — 真正停止 AudioRecord 硬件，不仅设标志位"""
         self.is_paused = True
         self._pause_event.clear()
+        # 暂停时丢弃未完成的敲击采集，恢复后重新触发
+        self._reset_impact_capture()
 
         # 停止 Android AudioRecord 硬件，释放麦克风供电
         if self._is_android and self._audio_record:
