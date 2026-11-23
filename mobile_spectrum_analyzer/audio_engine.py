@@ -87,8 +87,7 @@ class AudioSpectrumEngine:
         self.impact_mode = False
         self.impact_pre_sec = 0.05          # 触发前保留的音频长度
         self.impact_post_sec = 1.0          # 触发后采集时长（越长频率分辨率越高）
-        self.impact_sensitivity = 5         # 触发灵敏度 1(低) ~ 10(高)
-        self.impact_min_peak = 0.012        # 绝对触发门限（归一化幅度）
+        self.impact_threshold_db = -26.0    # 触发电平门限（dBFS 峰值），越高越抗环境噪音
         self.impact_refractory_sec = 0.3    # 一次采集结束后的冷却时间
         self.impact_max_modes = 5           # 最多报告的模态数量
         self.impact_fmin = 20.0             # 分析下限，避开直流/工频
@@ -272,13 +271,12 @@ class AudioSpectrumEngine:
             self._impact_ready_waveform = None
             self._impact_noise_floor = 0.002
 
-    def set_impact_sensitivity(self, value):
-        """触发灵敏度：1 最迟钝（抗误触发），10 最灵敏（可检测轻敲）"""
-        self.impact_sensitivity = max(1, min(10, int(value)))
+    def set_impact_threshold_db(self, db):
+        """触发电平门限（dBFS 峰值）：环境噪音大时调高，轻敲测不出来时调低"""
+        self.impact_threshold_db = max(-80.0, min(-3.0, float(db)))
 
-    def _impact_trigger_factor(self):
-        # 灵敏度映射为噪声底的倍数：2x ~ 20x
-        return 2.0 + (10 - max(1, min(10, int(self.impact_sensitivity)))) * 2.0
+    def _impact_threshold_amp(self):
+        return 10.0 ** (self.impact_threshold_db / 20.0)
 
     def take_impact_waveform(self):
         """取出一次已采集完成的冲击响应（取走后清空），由 UI 线程调用"""
@@ -337,10 +335,8 @@ class AudioSpectrumEngine:
                 self._impact_noise_floor += 0.005 * (rms - self._impact_noise_floor)
             self._impact_noise_floor = max(self._impact_noise_floor, 1e-5)
 
-            threshold = max(
-                self.impact_min_peak,
-                self._impact_noise_floor * self._impact_trigger_factor()
-            )
+            # 用户设定的电平门限为主，噪声底 3 倍作为兜底，避免持续噪音误触发
+            threshold = max(self._impact_threshold_amp(), self._impact_noise_floor * 3.0)
 
             if peak < threshold:
                 self._impact_prebuffer.extend(block)
@@ -368,6 +364,15 @@ class AudioSpectrumEngine:
         x = x - np.mean(x)
         sr = float(self.samplerate)
         n = len(x)
+
+        # 敲击响应应当自由衰减：持续环境噪音前后能量接近，直接拒绝，避免误分析
+        half = n // 2
+        if half > 0:
+            e_head = float(np.mean(x[:half] * x[:half]))
+            e_tail = float(np.mean(x[half:] * x[half:]))
+            if e_tail > 0 and e_head < e_tail * 1.3:
+                print("[敲击] 响应无明显衰减，判定为环境噪音，已丢弃")
+                return None
 
         window = np.hanning(n)
         wsum = float(np.sum(window))

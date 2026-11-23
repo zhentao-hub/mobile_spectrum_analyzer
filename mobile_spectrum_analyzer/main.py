@@ -797,16 +797,16 @@ class ControlPanel(ScrollView):
         ))
 
         self.layout.add_widget(Label(
-            text='Impact Sensitivity:',
+            text='Trigger Threshold (dB):',
             size_hint_y=None,
             height=dp(20),
             color=(0.8, 0.8, 0.8, 1)
         ))
-        self.impact_sens_slider = Slider(min=1, max=10, value=5, step=1, size_hint_y=None, height=dp(40))
-        self.impact_sens_label = Label(text='5', size_hint_y=None, height=dp(20), color=(1, 1, 1, 1))
-        self.impact_sens_slider.bind(value=self.on_impact_sens_change)
-        self.layout.add_widget(self.impact_sens_slider)
-        self.layout.add_widget(self.impact_sens_label)
+        self.impact_threshold_slider = Slider(min=-60, max=-6, value=-26, step=1, size_hint_y=None, height=dp(40))
+        self.impact_threshold_label = Label(text='-26 dB', size_hint_y=None, height=dp(20), color=(1, 1, 1, 1))
+        self.impact_threshold_slider.bind(value=self.on_impact_threshold_change)
+        self.layout.add_widget(self.impact_threshold_slider)
+        self.layout.add_widget(self.impact_threshold_label)
 
         self.impact_result_label = Label(
             text='No impact captured yet',
@@ -898,9 +898,10 @@ class ControlPanel(ScrollView):
         instance.text = 'Arm Impact: ON' if enabled else 'Arm Impact: OFF'
         self.app_ref.set_impact_mode(enabled)
 
-    def on_impact_sens_change(self, instance, value):
-        self.impact_sens_label.text = str(int(value))
-        self.app_ref.set_impact_sensitivity(int(value))
+    def on_impact_threshold_change(self, instance, value):
+        db = int(value)
+        self.impact_threshold_label.text = f'{db} dB'
+        self.app_ref.set_impact_threshold_db(db)
 
     def update_impact_result(self, text):
         self.impact_result_label.text = text
@@ -1200,8 +1201,8 @@ class SpectrumAnalyzerApp(App):
                 self.info_panel.update_status('Capturing')
             print("[敲击] 已退出敲击测试")
 
-    def set_impact_sensitivity(self, value):
-        self.engine.set_impact_sensitivity(value)
+    def set_impact_threshold_db(self, db):
+        self.engine.set_impact_threshold_db(db)
 
     def clear_impact_results(self):
         self.impact_taps = []
@@ -1221,15 +1222,19 @@ class SpectrumAnalyzerApp(App):
             )
 
     def _poll_impact(self):
-        """检查引擎是否完成了新的敲击采集，并完成频谱分析"""
+        """检查引擎是否完成了新的敲击采集，并完成频谱分析（单次触发）"""
         waveform = self.engine.take_impact_waveform()
         if waveform is None:
             return
 
+        # 单次触发：采集到一次就撤防并定格画面，下次测量需手动重新 Arm
+        self.engine.set_impact_detection(False)
+        self.control_panel.reset_impact_ui()
+
         print(f"[敲击] 采集完成，样本数: {len(waveform)}")
         result = self.engine.analyze_impact(waveform)
         if not result or not result['modes']:
-            self.info_panel.update_status('Impact: no clear mode')
+            self.info_panel.update_status('Impact: no clear mode (Arm to retry)')
             print("[敲击] 未检测到明显模态")
             return
 
@@ -1257,7 +1262,7 @@ class SpectrumAnalyzerApp(App):
         self._sync_freq_view(redraw=False)
         self.spectrum_canvas.update_data(freqs, mag, None, peaks)
         self.impact_view = True
-        self.info_panel.update_status(f'Impact #{self.impact_count} (Back to Live)')
+        self.info_panel.update_status(f'Impact #{self.impact_count} frozen (Arm for next)')
 
     def _refresh_impact_summary(self, result):
         modes = result['modes']
