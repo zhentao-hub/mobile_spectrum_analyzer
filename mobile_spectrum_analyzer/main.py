@@ -1091,6 +1091,10 @@ class SpectrumAnalyzerApp(App):
             if self.impact_view:
                 return
 
+            # 敲击布防等待中：麦克风继续监听触发，但不刷新实时频谱，避免干扰读数
+            if self.engine.impact_mode:
+                return
+
             # [修复] 画布暂停时跳过所有 FFT 计算和重绘，只保留最小化的交互响应
             if self.spectrum_canvas.paused:
                 return

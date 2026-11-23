@@ -199,6 +199,10 @@ class AudioSpectrumEngine:
 
         self._process_impact(audio_data)
 
+        # 敲击布防/采集期间不需要实时频谱，跳过 FFT，避免无谓占用
+        if self.impact_mode:
+            return None, None
+
         self._audio_buffer.extend(audio_data)
 
         buffer_data = np.array(list(self._audio_buffer)[-self.fft_size:])
