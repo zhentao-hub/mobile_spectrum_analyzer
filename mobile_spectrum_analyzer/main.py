@@ -445,12 +445,23 @@ class SpectrumCanvas(FloatLayout):
         max_points = min(n, 800)
         step = max(1, n // max_points)
 
-        for i in range(0, n, step):
+        # 高分辨率 FFT（敲击回看 df≈0.18Hz）的谐振峰可能只有 1~2 个 bin 宽，
+        # 等步长抽稀会跳过尖峰，导致波形看起来贴底、峰值丢失。
+        # 这里每个桶取幅值最大的点（max-decimation），保住峰值包络。
+        if step > 1:
+            nb = n // step
+            seg = display_mags[:nb * step].reshape(nb, step)
+            local_max = np.argmax(seg, axis=1)
+            sample_idx = np.arange(nb) * step + local_max
+            tail = display_mags[nb * step:]
+            if tail.size:
+                sample_idx = np.concatenate([sample_idx, [nb * step + int(np.argmax(tail))]])
+        else:
+            sample_idx = np.arange(n)
+
+        for i in sample_idx:
             fx = plot_x + plot_w * (display_freqs[i] - f_min) / freq_range
-            if self.log_scale:
-                fy = plot_y + plot_h * (display_mags[i] - mag_min) / mag_range
-            else:
-                fy = plot_y + plot_h * (display_mags[i] - mag_min) / mag_range
+            fy = plot_y + plot_h * (display_mags[i] - mag_min) / mag_range
             fy = max(plot_y, min(plot_y + plot_h, fy))
             points.extend([fx, fy])
 
@@ -1264,6 +1275,14 @@ class SpectrumAnalyzerApp(App):
         self.spectrum_canvas.paused = True
         # 不锁定横坐标：沿用当前频率滑块范围和缩放，便于只看感兴趣的频段
         self._sync_freq_view(redraw=False)
+
+        # 线性刻度下自动量程：让本次敲击的主峰顶到画面顶部，避免峰值淹没在底噪里
+        if not self.spectrum_canvas.log_scale and len(result['magnitude']) > 0:
+            data_max = float(np.max(result['magnitude']))
+            if data_max > 0:
+                fit = min(0.5, max(0.001, data_max * 1.15))
+                self.control_panel.amp_max_slider.value = fit
+
         self.spectrum_canvas.update_data(freqs, mag, None, peaks)
         self.impact_view = True
         self.info_panel.update_status(f'Impact #{self.impact_count} frozen (Arm for next)')
