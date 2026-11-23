@@ -54,6 +54,9 @@ class SpectrumCanvas(FloatLayout):
 
         self.zoom_start = 0.0
         self.zoom_end = 1.0
+        # 显示频率范围（与 Min/Max Frequency 滑块共用），None 表示跟随数据
+        self.freq_view_min = None
+        self.freq_view_max = None
 
         self.dragging = False
         self.last_touch_x = 0
@@ -267,7 +270,7 @@ class SpectrumCanvas(FloatLayout):
             return
 
         mouse_ratio = (touch_x - plot_x) / plot_w
-        f_min_all, f_max_all = self.freqs[0], self.freqs[-1]
+        f_min_all, f_max_all = self._get_freq_bounds()
         freq_range_all = f_max_all - f_min_all if f_max_all > f_min_all else 1
 
         if self.paused:
@@ -384,6 +387,19 @@ class SpectrumCanvas(FloatLayout):
             h - bottom_margin - top_margin
         )
 
+    def _get_freq_bounds(self):
+        """显示频率的基准范围，受 Min/Max Frequency 滑块约束"""
+        f_min_all = float(self.freqs[0])
+        f_max_all = float(self.freqs[-1])
+        if self.freq_view_min is None or self.freq_view_max is None:
+            return f_min_all, f_max_all
+
+        f_min = max(f_min_all, float(self.freq_view_min))
+        f_max = min(f_max_all, float(self.freq_view_max))
+        if f_max <= f_min:
+            return f_min_all, f_max_all
+        return f_min, f_max
+
     def _draw_frequency_domain(self):
         if self.freqs is None or self.magnitude is None or len(self.freqs) == 0:
             self.spectrum_line.points = []
@@ -393,7 +409,7 @@ class SpectrumCanvas(FloatLayout):
 
         plot_x, plot_y, plot_w, plot_h = self._get_plot_area()
 
-        f_min_all, f_max_all = self.freqs[0], self.freqs[-1]
+        f_min_all, f_max_all = self._get_freq_bounds()
         freq_range_all = f_max_all - f_min_all if f_max_all > f_min_all else 1
 
         if self.paused:
@@ -977,6 +993,10 @@ class SpectrumAnalyzerApp(App):
         self.control_panel = ControlPanel(self)
         content.add_widget(self.control_panel)
 
+        # 频谱画布初始显示范围与频率滑块一致
+        self.spectrum_canvas.freq_view_min = float(self.control_panel.freq_min_slider.value)
+        self.spectrum_canvas.freq_view_max = float(self.control_panel.freq_max_slider.value)
+
         self.root_layout.add_widget(content)
 
         self.update_event = None
@@ -1120,9 +1140,22 @@ class SpectrumAnalyzerApp(App):
 
     def set_freq_min(self, freq_min):
         self.engine.freq_min = freq_min
+        self._sync_freq_view(reset_zoom=True)
 
     def set_freq_max(self, freq_max):
         self.engine.freq_max = freq_max
+        self._sync_freq_view(reset_zoom=True)
+
+    def _sync_freq_view(self, reset_zoom=False, redraw=True):
+        """把滑块范围同步到画布，实时频谱与敲击回看共用"""
+        canvas = self.spectrum_canvas
+        canvas.freq_view_min = float(self.control_panel.freq_min_slider.value)
+        canvas.freq_view_max = float(self.control_panel.freq_max_slider.value)
+        if reset_zoom:
+            canvas.zoom_start = 0.0
+            canvas.zoom_end = 1.0
+        if redraw:
+            canvas.draw()
 
     def set_amp_max(self, amp_max):
         self.engine.amp_max = amp_max
@@ -1220,8 +1253,8 @@ class SpectrumAnalyzerApp(App):
         self.control_panel.time_mode_btn.state = 'normal'
 
         self.spectrum_canvas.paused = True
-        self.spectrum_canvas.zoom_start = 0.0
-        self.spectrum_canvas.zoom_end = 1.0
+        # 不锁定横坐标：沿用当前频率滑块范围和缩放，便于只看感兴趣的频段
+        self._sync_freq_view(redraw=False)
         self.spectrum_canvas.update_data(freqs, mag, None, peaks)
         self.impact_view = True
         self.info_panel.update_status(f'Impact #{self.impact_count} (Back to Live)')

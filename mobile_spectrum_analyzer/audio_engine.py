@@ -379,7 +379,7 @@ class AudioSpectrumEngine:
         freqs = np.fft.rfftfreq(nfft, 1.0 / sr)
         df = sr / float(nfft)
 
-        f_min = self.impact_fmin
+        f_min = max(float(self.impact_fmin), float(self.freq_min))
         f_max = min(float(self.freq_max) if self.freq_max > 0 else sr / 2.0, sr / 2.0)
         if f_max <= f_min:
             f_max = sr / 2.0
