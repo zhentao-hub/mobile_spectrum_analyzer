@@ -368,6 +368,7 @@ class AudioSpectrumEngine:
         x = x - np.mean(x)
         sr = float(self.samplerate)
         n = len(x)
+        n_orig = n  # 保留原始采集长度，用于确定零填充后的频率分辨率
 
         # 敲击响应应当自由衰减：持续环境噪音前后能量接近，直接拒绝，避免误分析
         half = n // 2
@@ -378,12 +379,40 @@ class AudioSpectrumEngine:
                 print("[敲击] 响应无明显衰减，判定为环境噪音，已丢弃")
                 return None
 
+        # 自适应截取：敲击往往 0.1~0.3 秒就衰减完，若用固定 1 秒窗口做 FFT，
+        # 幅值会被平均到后面的静音段，被稀释几十~几百倍（衰减越快越严重），
+        # 导致波形看起来极小、快衰减模态被底噪淹没。这里只保留响应真正存在的
+        # 段落，尾部静音截掉，再靠零填充维持频率分辨率。
+        if n > int(sr * 0.15):
+            env_win = max(1, int(sr * 0.01))
+            env = np.convolve(np.abs(x), np.ones(env_win) / env_win, mode='same')
+            pk_idx = int(np.argmax(env))
+            peak_env = float(env[pk_idx])
+            tail_len = min(len(env), int(sr * 0.03))
+            noise = float(np.median(env[-tail_len:])) if tail_len > 0 else 0.0
+            cutoff = max(peak_env * 0.04, noise * 2.0, 1e-4)
+            below = env[pk_idx:] < cutoff
+            trunc = n
+            if np.any(below):
+                need = max(1, int(sr * 0.04))  # 连续 40ms 低于门限才确认衰减结束
+                run = 0
+                for j in range(len(below)):
+                    run = run + 1 if below[j] else 0
+                    if run >= need:
+                        trunc = pk_idx + j - need + 1
+                        break
+            trunc = min(n, max(trunc, int(sr * 0.08)))  # 至少保留 80ms，保证分辨率
+            if trunc < n:
+                x = x[:trunc]
+                n = trunc
+
         window = np.hanning(n)
         wsum = float(np.sum(window))
         if wsum <= 0:
             return None
 
-        nfft = 1 << int(np.ceil(np.log2(max(n * 4, 8192))))
+        # 零填充到原始采集长度的 4 倍，频率分辨率与未截断时一致（df≈0.18Hz）
+        nfft = 1 << int(np.ceil(np.log2(max(n_orig * 4, 8192))))
         spectrum = np.abs(np.fft.rfft(x * window, nfft)) * 2.0 / wsum
         freqs = np.fft.rfftfreq(nfft, 1.0 / sr)
         df = sr / float(nfft)
