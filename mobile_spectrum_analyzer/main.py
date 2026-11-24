@@ -27,6 +27,7 @@ from kivy.uix.togglebutton import ToggleButton
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
+from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.graphics import Color, Line, Rectangle, Ellipse
 from kivy.graphics.vertex_instructions import Mesh
 from kivy.clock import Clock
@@ -780,73 +781,6 @@ class ControlPanel(ScrollView):
         self.layout.add_widget(self.amp_max_slider)
         self.layout.add_widget(self.amp_max_label)
 
-        # ---- 敲击测试 (Impact Test) ----
-        self.layout.add_widget(Label(
-            text='[b]Impact Test[/b]',
-            markup=True,
-            size_hint_y=None,
-            height=dp(30),
-            color=(1, 1, 1, 1)
-        ))
-
-        self.impact_btn = ToggleButton(
-            text='Arm Impact: OFF',
-            size_hint_y=None,
-            height=dp(45),
-            background_color=(0.25, 0.45, 0.75, 1),
-            color=(1, 1, 1, 1)
-        )
-        self.impact_btn.bind(on_press=self.on_impact_toggle)
-        self.layout.add_widget(self.impact_btn)
-
-        self.layout.add_widget(Label(
-            text='Arm, then tap the object',
-            font_size='11sp',
-            size_hint_y=None,
-            height=dp(20),
-            color=(0.7, 0.7, 0.7, 1)
-        ))
-
-        self.layout.add_widget(Label(
-            text='Trigger Threshold (dB):',
-            size_hint_y=None,
-            height=dp(20),
-            color=(0.8, 0.8, 0.8, 1)
-        ))
-        self.impact_threshold_slider = Slider(min=-60, max=-6, value=-26, step=1, size_hint_y=None, height=dp(40))
-        self.impact_threshold_label = Label(text='-26 dB', size_hint_y=None, height=dp(20), color=(1, 1, 1, 1))
-        self.impact_threshold_slider.bind(value=self.on_impact_threshold_change)
-        self.layout.add_widget(self.impact_threshold_slider)
-        self.layout.add_widget(self.impact_threshold_label)
-
-        self.impact_result_label = Label(
-            text='No impact captured yet',
-            markup=True,
-            font_size='11sp',
-            size_hint_y=None,
-            height=dp(110),
-            color=(1, 1, 1, 1),
-            halign='left',
-            valign='top',
-            text_size=(dp(250), None)
-        )
-        self.layout.add_widget(self.impact_result_label)
-
-        impact_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(40), spacing=dp(8))
-        self.impact_back_btn = Button(
-            text='Back to Live',
-            font_size='13sp',
-            on_press=lambda x: self.app_ref.exit_impact_view()
-        )
-        self.impact_clear_btn = Button(
-            text='Clear',
-            font_size='13sp',
-            on_press=lambda x: self.app_ref.clear_impact_results()
-        )
-        impact_row.add_widget(self.impact_back_btn)
-        impact_row.add_widget(self.impact_clear_btn)
-        self.layout.add_widget(impact_row)
-
         self.layout.add_widget(Label())
 
     def on_start(self, instance):
@@ -904,22 +838,142 @@ class ControlPanel(ScrollView):
         self.amp_max_label.text = f'{value:.3f}'
         self.app_ref.set_amp_max(value)
 
-    def on_impact_toggle(self, instance):
+
+
+class ModalControlPanel(ScrollView):
+    """模态测试独立控制面板（与频谱分析界面分离）"""
+
+    def __init__(self, app_ref, **kwargs):
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+        self.size_hint_x = None
+        self.width = dp(280)
+        self.bar_width = dp(10)
+        self.scroll_type = ['bars', 'content']
+
+        self.layout = BoxLayout(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(900),
+            padding=dp(10),
+            spacing=dp(8)
+        )
+        self.layout.bind(minimum_height=self.layout.setter('height'))
+        self.add_widget(self.layout)
+
+        self.layout.add_widget(Label(
+            text='[b]Modal Test[/b]',
+            markup=True,
+            size_hint_y=None,
+            height=dp(30),
+            color=(1, 1, 1, 1)
+        ))
+
+        self.arm_btn = ToggleButton(
+            text='Arm Impact: OFF',
+            size_hint_y=None,
+            height=dp(50),
+            background_color=(0.25, 0.45, 0.75, 1),
+            color=(1, 1, 1, 1)
+        )
+        self.arm_btn.bind(on_press=self.on_arm_toggle)
+        self.layout.add_widget(self.arm_btn)
+
+        self.layout.add_widget(Label(
+            text='Arm, then tap the object',
+            font_size='11sp',
+            size_hint_y=None,
+            height=dp(20),
+            color=(0.7, 0.7, 0.7, 1)
+        ))
+
+        self._add_slider('Trigger Threshold (dB):', 'threshold', -60, -6, -26, 1, '{:.0f} dB', self.on_threshold_change)
+        # 模态显示点数可调：控制 analyze_impact 报告的模态数量
+        self._add_slider('Mode Count:', 'mode_count', 1, 10, 5, 1, '{:.0f}', self.on_mode_count_change)
+
+        self.log_btn = ToggleButton(text='Log Scale (dB)', size_hint_y=None, height=dp(40))
+        self.log_btn.bind(on_press=self.on_log_change)
+        self.layout.add_widget(self.log_btn)
+
+        self._add_slider('Min Frequency (Hz):', 'freq_min', 0, 5000, 0, 100, '{:.0f} Hz', self.on_freq_min_change)
+        self._add_slider('Max Frequency (Hz):', 'freq_max', 100, 24000, 20000, 100, '{:.0f} Hz', self.on_freq_max_change)
+        self._add_slider('Max Magnitude:', 'amp_max', 0.001, 0.5, 0.5, 0.001, '{:.3f}', self.on_amp_max_change)
+
+        self.result_label = Label(
+            text='No impact captured yet',
+            markup=True,
+            font_size='11sp',
+            size_hint_y=None,
+            height=dp(140),
+            color=(1, 1, 1, 1),
+            halign='left',
+            valign='top',
+            text_size=(dp(250), None)
+        )
+        self.layout.add_widget(self.result_label)
+
+        self.clear_btn = Button(
+            text='Clear Results',
+            font_size='14sp',
+            size_hint_y=None,
+            height=dp(45),
+            on_press=self.on_clear
+        )
+        self.layout.add_widget(self.clear_btn)
+
+        self.layout.add_widget(Label())
+
+    def _add_slider(self, title, name, vmin, vmax, vdefault, step, fmt, callback):
+        self.layout.add_widget(Label(text=title, size_hint_y=None, height=dp(20), color=(0.8, 0.8, 0.8, 1)))
+        slider = Slider(min=vmin, max=vmax, value=vdefault, step=step, size_hint_y=None, height=dp(40))
+        label = Label(text=fmt.format(vdefault), size_hint_y=None, height=dp(20), color=(1, 1, 1, 1))
+        setattr(self, f'{name}_slider', slider)
+        setattr(self, f'{name}_label', label)
+        slider.bind(value=callback)
+        self.layout.add_widget(slider)
+        self.layout.add_widget(label)
+
+    # ---- 回调 ----
+    def on_arm_toggle(self, instance):
         enabled = instance.state == 'down'
         instance.text = 'Arm Impact: ON' if enabled else 'Arm Impact: OFF'
         self.app_ref.set_impact_mode(enabled)
 
-    def on_impact_threshold_change(self, instance, value):
+    def on_threshold_change(self, instance, value):
         db = int(value)
-        self.impact_threshold_label.text = f'{db} dB'
+        self.threshold_label.text = f'{db} dB'
         self.app_ref.set_impact_threshold_db(db)
 
-    def update_impact_result(self, text):
-        self.impact_result_label.text = text
+    def on_mode_count_change(self, instance, value):
+        n = int(value)
+        self.mode_count_label.text = str(n)
+        self.app_ref.set_modal_mode_count(n)
 
-    def reset_impact_ui(self):
-        self.impact_btn.state = 'normal'
-        self.impact_btn.text = 'Arm Impact: OFF'
+    def on_log_change(self, instance):
+        self.app_ref.set_modal_log_scale(instance.state == 'down')
+
+    def on_freq_min_change(self, instance, value):
+        self.freq_min_label.text = f'{int(value)} Hz'
+        self.app_ref.set_freq_min(int(value))
+
+    def on_freq_max_change(self, instance, value):
+        self.freq_max_label.text = f'{int(value)} Hz'
+        self.app_ref.set_freq_max(int(value))
+
+    def on_amp_max_change(self, instance, value):
+        self.amp_max_label.text = f'{value:.3f}'
+        self.app_ref.set_modal_amp_max(value)
+
+    def on_clear(self, instance):
+        self.app_ref.clear_impact_results()
+
+    # ---- 供 App 调用 ----
+    def update_result(self, text):
+        self.result_label.text = text
+
+    def reset_arm_ui(self):
+        self.arm_btn.state = 'normal'
+        self.arm_btn.text = 'Arm Impact: OFF'
 
 
 class InfoPanel(BoxLayout):
@@ -993,23 +1047,54 @@ class SpectrumAnalyzerApp(App):
 
         self.root_layout = BoxLayout(orientation='vertical')
 
+        # 顶部 Tab 栏：频谱分析 / 模态测试 两个独立界面
+        tab_bar = BoxLayout(orientation='horizontal', size_hint_y=None, height=dp(44), spacing=dp(2))
+        self.tab_spectrum = ToggleButton(text='Spectrum', group='screen', state='down')
+        self.tab_modal = ToggleButton(text='Modal Test', group='screen', state='normal')
+        self.tab_spectrum.bind(on_press=lambda x: self.switch_screen('spectrum'))
+        self.tab_modal.bind(on_press=lambda x: self.switch_screen('modal'))
+        tab_bar.add_widget(self.tab_spectrum)
+        tab_bar.add_widget(self.tab_modal)
+        self.root_layout.add_widget(tab_bar)
+
         self.info_panel = InfoPanel()
         self.root_layout.add_widget(self.info_panel)
 
-        content = BoxLayout(orientation='horizontal')
+        self.sm = ScreenManager()
 
+        # --- 频谱分析页 ---
+        spectrum_screen = Screen(name='spectrum')
+        spectrum_content = BoxLayout(orientation='horizontal')
         self.spectrum_canvas = SpectrumCanvas()
         self.spectrum_canvas.samplerate = self.engine.samplerate
-        content.add_widget(self.spectrum_canvas)
-
+        spectrum_content.add_widget(self.spectrum_canvas)
         self.control_panel = ControlPanel(self)
-        content.add_widget(self.control_panel)
+        spectrum_content.add_widget(self.control_panel)
+        spectrum_screen.add_widget(spectrum_content)
+        self.sm.add_widget(spectrum_screen)
 
-        # 频谱画布初始显示范围与频率滑块一致
+        # --- 模态测试页 ---
+        modal_screen = Screen(name='modal')
+        modal_content = BoxLayout(orientation='horizontal')
+        self.modal_canvas = SpectrumCanvas()
+        self.modal_canvas.samplerate = self.engine.samplerate
+        modal_content.add_widget(self.modal_canvas)
+        self.modal_panel = ModalControlPanel(self)
+        modal_content.add_widget(self.modal_panel)
+        modal_screen.add_widget(modal_content)
+        self.sm.add_widget(modal_screen)
+
+        self.sm.current = 'spectrum'
+        self.root_layout.add_widget(self.sm)
+
+        # 画布初始显示范围与各自频率滑块一致
         self.spectrum_canvas.freq_view_min = float(self.control_panel.freq_min_slider.value)
         self.spectrum_canvas.freq_view_max = float(self.control_panel.freq_max_slider.value)
+        self.modal_canvas.freq_view_min = float(self.modal_panel.freq_min_slider.value)
+        self.modal_canvas.freq_view_max = float(self.modal_panel.freq_max_slider.value)
 
-        self.root_layout.add_widget(content)
+        self.active_screen = 'spectrum'
+        self._last_impact_waveform = None
 
         self.update_event = None
         self.frame_count = 0
@@ -1025,6 +1110,42 @@ class SpectrumAnalyzerApp(App):
         self.impact_count = 0
 
         return self.root_layout
+
+    def switch_screen(self, name):
+        """界面切换唯一入口：同时更新主状态、派生状态与控件，避免状态分裂"""
+        if not hasattr(self, 'sm') or self.sm.current == name:
+            return
+        # 离开模态页时撤防，避免麦克风在后台持续触发
+        if self.active_screen == 'modal' and self.engine.impact_mode:
+            self.engine.set_impact_detection(False)
+            self.modal_panel.reset_arm_ui()
+        self.active_screen = name
+        self.sm.current = name
+        if name == 'modal':
+            # 进入模态页时，把共享的频率范围从引擎同步到模态滑块
+            self._sync_panel_freq_sliders(self.modal_panel)
+            self.modal_canvas.freq_view_min = float(self.engine.freq_min)
+            self.modal_canvas.freq_view_max = float(self.engine.freq_max)
+            self.info_panel.update_status(
+                'Impact: tap the object' if self.engine.impact_mode else 'Modal: Arm then tap'
+            )
+        else:
+            self._sync_panel_freq_sliders(self.control_panel)
+            if self.engine.impact_mode:
+                self.info_panel.update_status('Impact: tap the object')
+            elif self.engine.is_running and not self.engine.is_paused:
+                self.info_panel.update_status('Capturing')
+            else:
+                self.info_panel.update_status('Ready')
+        canvas = self.modal_canvas if name == 'modal' else self.spectrum_canvas
+        canvas.draw()
+
+    def _sync_panel_freq_sliders(self, panel):
+        """把引擎的频率范围（单一事实来源）同步到指定面板的滑块显示"""
+        panel.freq_min_slider.value = float(self.engine.freq_min)
+        panel.freq_min_label.text = f'{int(self.engine.freq_min)} Hz'
+        panel.freq_max_slider.value = float(self.engine.freq_max)
+        panel.freq_max_label.text = f'{int(self.engine.freq_max)} Hz'
 
     def start_capture(self):
         self.engine.stop_capture()
@@ -1059,7 +1180,7 @@ class SpectrumAnalyzerApp(App):
     def stop_capture(self):
         if self.engine.impact_mode:
             self.engine.set_impact_detection(False)
-            self.control_panel.reset_impact_ui()
+            self.modal_panel.reset_arm_ui()
         self.impact_view = False
         self.engine.stop_capture()
         self.info_panel.update_status('Stopped')
@@ -1095,18 +1216,12 @@ class SpectrumAnalyzerApp(App):
 
     def update_display(self, dt):
         try:
-            # 敲击结果优先处理：即使画布处于回看/暂停状态也要接收新结果
-            self._poll_impact()
-
-            # 敲击频谱回看中：保持画面不动，等待用户点击 Back to Live
-            if self.impact_view:
+            if self.active_screen == 'modal':
+                # 模态页：只轮询敲击结果，不刷新实时频谱（引擎在 impact_mode 下也跳过 FFT）
+                self._poll_impact()
                 return
 
-            # 敲击布防等待中：麦克风继续监听触发，但不刷新实时频谱，避免干扰读数
-            if self.engine.impact_mode:
-                return
-
-            # [修复] 画布暂停时跳过所有 FFT 计算和重绘，只保留最小化的交互响应
+            # 频谱页：画布暂停时跳过 FFT 计算和重绘
             if self.spectrum_canvas.paused:
                 return
 
@@ -1163,15 +1278,20 @@ class SpectrumAnalyzerApp(App):
         self._sync_freq_view(reset_zoom=True)
 
     def _sync_freq_view(self, reset_zoom=False, redraw=True):
-        """把滑块范围同步到画布，实时频谱与敲击回看共用"""
-        canvas = self.spectrum_canvas
-        canvas.freq_view_min = float(self.control_panel.freq_min_slider.value)
-        canvas.freq_view_max = float(self.control_panel.freq_max_slider.value)
-        if reset_zoom:
-            canvas.zoom_start = 0.0
-            canvas.zoom_end = 1.0
+        """把引擎频率范围（单一事实来源）同步到两个画布，重绘当前可见画布"""
+        fmin = float(self.engine.freq_min)
+        fmax = float(self.engine.freq_max)
+        for canvas in (self.spectrum_canvas, self.modal_canvas):
+            canvas.freq_view_min = fmin
+            canvas.freq_view_max = fmax
+            if reset_zoom:
+                canvas.zoom_start = 0.0
+                canvas.zoom_end = 1.0
         if redraw:
-            canvas.draw()
+            if self.active_screen == 'modal':
+                self.modal_canvas.draw()
+            else:
+                self.spectrum_canvas.draw()
 
     def set_amp_max(self, amp_max):
         self.engine.amp_max = amp_max
@@ -1192,15 +1312,11 @@ class SpectrumAnalyzerApp(App):
                 else:
                     self.start_capture()
             self.impact_view = False
-            self.spectrum_canvas.paused = False
-            self.spectrum_canvas.zoom_start = 0.0
-            self.spectrum_canvas.zoom_end = 1.0
+            self.modal_canvas.paused = False
+            self.modal_canvas.zoom_start = 0.0
+            self.modal_canvas.zoom_end = 1.0
             self.engine.set_impact_detection(True)
             self.info_panel.update_status('Impact: tap the object')
-            if auto_started:
-                self.control_panel.start_btn.disabled = True
-                self.control_panel.stop_btn.disabled = False
-                self.control_panel.pause_btn.disabled = False
             if self.update_event:
                 self.update_event.cancel()
             self.update_event = Clock.schedule_interval(self.update_display, 1.0 / self.FPS_ACTIVE)
@@ -1209,32 +1325,45 @@ class SpectrumAnalyzerApp(App):
             self.engine.set_impact_detection(False)
             self.impact_view = False
             if self.engine.is_running and not self.engine.is_paused:
-                self.spectrum_canvas.paused = False
-                self.spectrum_canvas.zoom_start = 0.0
-                self.spectrum_canvas.zoom_end = 1.0
-                self.spectrum_canvas.draw()
+                self.modal_canvas.paused = False
+                self.modal_canvas.zoom_start = 0.0
+                self.modal_canvas.zoom_end = 1.0
+                self.modal_canvas.draw()
                 self.info_panel.update_status('Capturing')
             print("[敲击] 已退出敲击测试")
 
     def set_impact_threshold_db(self, db):
         self.engine.set_impact_threshold_db(db)
 
+    def set_modal_mode_count(self, n):
+        """调整模态显示点数：即时重分析最近一次敲击波形并刷新画面"""
+        self.engine.impact_max_modes = int(n)
+        if self._last_impact_waveform is None:
+            return
+        result = self.engine.analyze_impact(self._last_impact_waveform)
+        if result and result['modes']:
+            self._show_impact_result(result, auto_range=False)
+            self._refresh_impact_summary(result)
+
+    def set_modal_log_scale(self, enabled):
+        """切换模态画布对数刻度，并重绘最近一次结果"""
+        self.modal_canvas.log_scale = enabled
+        if self._last_impact_waveform is None:
+            return
+        result = self.engine.analyze_impact(self._last_impact_waveform)
+        if result:
+            self._show_impact_result(result, auto_range=False)
+
+    def set_modal_amp_max(self, value):
+        self.modal_canvas.amp_max = value
+        self.modal_canvas.draw()
+
     def clear_impact_results(self):
         self.impact_taps = []
         self.impact_count = 0
-        self.control_panel.update_impact_result('No impact captured yet')
+        self._last_impact_waveform = None
+        self.modal_panel.update_result('No impact captured yet')
         print("[敲击] 已清空历史结果")
-
-    def exit_impact_view(self):
-        self.impact_view = False
-        if self.engine.is_running and not self.engine.is_paused:
-            self.spectrum_canvas.paused = False
-            self.spectrum_canvas.zoom_start = 0.0
-            self.spectrum_canvas.zoom_end = 1.0
-            self.spectrum_canvas.draw()
-            self.info_panel.update_status(
-                'Impact: tap the object' if self.engine.impact_mode else 'Capturing'
-            )
 
     def _poll_impact(self):
         """检查引擎是否完成了新的敲击采集，并完成频谱分析（单次触发）"""
@@ -1244,7 +1373,9 @@ class SpectrumAnalyzerApp(App):
 
         # 单次触发：采集到一次就撤防并定格画面，下次测量需手动重新 Arm
         self.engine.set_impact_detection(False)
-        self.control_panel.reset_impact_ui()
+        self.modal_panel.reset_arm_ui()
+        # 缓存最近一次波形，供模态数/对数滑块调整时即时重分析
+        self._last_impact_waveform = np.asarray(waveform, dtype=np.float64).copy()
 
         print(f"[敲击] 采集完成，样本数: {len(waveform)}")
         result = self.engine.analyze_impact(waveform)
@@ -1258,32 +1389,30 @@ class SpectrumAnalyzerApp(App):
         self._show_impact_result(result)
         self._refresh_impact_summary(result)
 
-    def _show_impact_result(self, result):
-        """在频谱画布上回看敲击响应的频谱"""
+    def _show_impact_result(self, result, auto_range=True):
+        """在模态画布上显示敲击响应的频谱"""
         freqs = result['freqs']
         mag = result['magnitude']
         peaks = result['modes']
-        if self.spectrum_canvas.log_scale:
+        if self.modal_canvas.log_scale:
             mag = 20.0 * np.log10(np.maximum(mag, 1e-10))
             peaks = [(f, 20.0 * np.log10(max(a, 1e-10))) for f, a in result['modes']]
 
-        # 强制切回频域视图，便于查看敲击频谱
-        self.spectrum_canvas.show_time_domain = False
-        self.control_panel.freq_mode_btn.state = 'down'
-        self.control_panel.time_mode_btn.state = 'normal'
-
-        self.spectrum_canvas.paused = True
+        # 强制频域视图，便于查看敲击频谱
+        self.modal_canvas.show_time_domain = False
+        self.modal_canvas.paused = True
         # 不锁定横坐标：沿用当前频率滑块范围和缩放，便于只看感兴趣的频段
         self._sync_freq_view(redraw=False)
 
         # 线性刻度下自动量程：让本次敲击的主峰顶到画面顶部，避免峰值淹没在底噪里
-        if not self.spectrum_canvas.log_scale and len(result['magnitude']) > 0:
+        # （仅在新敲击时自动量程；滑块重分析时尊重用户手动设置的幅值范围）
+        if auto_range and not self.modal_canvas.log_scale and len(result['magnitude']) > 0:
             data_max = float(np.max(result['magnitude']))
             if data_max > 0:
                 fit = min(0.5, max(0.001, data_max * 1.15))
-                self.control_panel.amp_max_slider.value = fit
+                self.modal_panel.amp_max_slider.value = fit
 
-        self.spectrum_canvas.update_data(freqs, mag, None, peaks)
+        self.modal_canvas.update_data(freqs, mag, None, peaks)
         self.impact_view = True
         self.info_panel.update_status(f'Impact #{self.impact_count} frozen (Arm for next)')
 
@@ -1305,7 +1434,7 @@ class SpectrumAnalyzerApp(App):
             )
             lines.append(f'[color=#88ff88]Avg: {avg}[/color]')
 
-        self.control_panel.update_impact_result('\n'.join(lines))
+        self.modal_panel.update_result('\n'.join(lines))
 
     @staticmethod
     def _cluster_modes(taps):
@@ -1341,6 +1470,8 @@ class SpectrumAnalyzerApp(App):
             self.root_layout.do_layout()
         if hasattr(self, 'spectrum_canvas'):
             self.spectrum_canvas._update_canvas()
+        if hasattr(self, 'modal_canvas'):
+            self.modal_canvas._update_canvas()
 
     def on_pause(self):
         """[修复] 应用切换到后台 — 暂停音频 + 取消 Clock 定时器，彻底停止 UI 重绘"""
@@ -1368,6 +1499,8 @@ class SpectrumAnalyzerApp(App):
         print("[生命周期] App 停止，彻底释放音频资源")
         self.stop_capture()
         self.spectrum_canvas.cleanup()
+        if hasattr(self, 'modal_canvas'):
+            self.modal_canvas.cleanup()
         Window.unbind(on_resize=self._on_window_resize)
 
 
