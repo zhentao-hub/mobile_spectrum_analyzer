@@ -904,7 +904,7 @@ class ModalControlPanel(ScrollView):
             markup=True,
             font_size='11sp',
             size_hint_y=None,
-            height=dp(140),
+            height=dp(180),
             color=(1, 1, 1, 1),
             halign='left',
             valign='top',
@@ -1427,7 +1427,27 @@ class SpectrumAnalyzerApp(App):
             f'Dominant: {dom_f:.0f} Hz ({dom_db:.0f} dB)',
         ]
 
+        # 精度置信度：单次敲击的峰质量（信噪比 / 峰宽 / 分离度 / 衰减 / 周期数）
+        metrics = result.get('metrics')
+        if metrics:
+            p = metrics['precision']
+            lines.append(
+                f'[color={self._conf_color(p)}]Precision: {p:.0f}%[/color]'
+                f'  SNR {metrics["snr_db"]:.0f}dB  BW {metrics["bandwidth"]:.1f}Hz'
+            )
+
+        # 稳定度：多次敲击主模态的重复性（命中率 × 离散度）
         clusters = self._cluster_modes(self.impact_taps)
+        stability = self._compute_stability(result, clusters)
+        if stability is None:
+            lines.append('[color=#999999]Stability: tap ≥2 times to rate[/color]')
+        else:
+            s = stability['score']
+            lines.append(
+                f'[color={self._conf_color(s)}]Stability: {s:.0f}%[/color]'
+                f'  {stability["hit"]}/{stability["total"]} taps  ±{stability["std"]:.1f}Hz'
+            )
+
         if clusters:
             avg = ' | '.join(
                 f"{c['mean']:.0f}Hz(n={c['n']},±{c['std']:.1f})" for c in clusters[:4]
@@ -1435,6 +1455,37 @@ class SpectrumAnalyzerApp(App):
             lines.append(f'[color=#88ff88]Avg: {avg}[/color]')
 
         self.modal_panel.update_result('\n'.join(lines))
+
+    def _compute_stability(self, result, clusters):
+        """多次敲击的稳定度：主模态在历史敲击中的命中率 × 频率离散度（0–100）"""
+        taps = self.impact_taps
+        if len(taps) < 2 or not clusters:
+            return None
+        dom_f = float(result['dominant'][0])
+        tol = max(5.0, dom_f * 0.03)
+        match = min(clusters, key=lambda c: abs(c['mean'] - dom_f))
+        hit_rate = min(1.0, match['n'] / float(len(taps)))
+        rel_std = (match['std'] / match['mean']) if match['mean'] > 0 else 1.0
+        # 相对标准差 0 视为满分离散度，达到 5% 视为完全不可信（线性衰减）
+        s_spread = max(0.0, min(1.0, 1.0 - rel_std / 0.05))
+        if abs(match['mean'] - dom_f) > tol:
+            s_spread *= 0.3  # 主模态在聚类里找不到对应，降低可信度
+        return {
+            'score': 100.0 * hit_rate * s_spread,
+            'hit': match['n'],
+            'total': len(taps),
+            'std': match['std'],
+            'mean': match['mean'],
+        }
+
+    @staticmethod
+    def _conf_color(score):
+        """置信度颜色：绿 ≥75，黄 ≥50，红 <50"""
+        if score >= 75.0:
+            return '#66ff88'
+        if score >= 50.0:
+            return '#ffd166'
+        return '#ff6b6b'
 
     @staticmethod
     def _cluster_modes(taps):

@@ -371,6 +371,7 @@ class AudioSpectrumEngine:
         n_orig = n  # 保留原始采集长度，用于确定零填充后的频率分辨率
 
         # 敲击响应应当自由衰减：持续环境噪音前后能量接近，直接拒绝，避免误分析
+        decay_ratio = 1.0
         half = n // 2
         if half > 0:
             e_head = float(np.mean(x[:half] * x[:half]))
@@ -378,6 +379,8 @@ class AudioSpectrumEngine:
             if e_tail > 0 and e_head < e_tail * 1.3:
                 print("[敲击] 响应无明显衰减，判定为环境噪音，已丢弃")
                 return None
+            if e_tail > 0:
+                decay_ratio = e_head / e_tail
 
         # 自适应截取：敲击往往 0.1~0.3 秒就衰减完，若用固定 1 秒窗口做 FFT，
         # 幅值会被平均到后面的静音段，被稀释几十~几百倍（衰减越快越严重），
@@ -452,6 +455,7 @@ class AudioSpectrumEngine:
         kept.sort()
 
         modes = []
+        mode_idx = []
         for i in kept:
             if i <= 0 or i >= len(spectrum) - 1:
                 continue
@@ -466,9 +470,50 @@ class AudioSpectrumEngine:
                 continue
             amp_ref = float(np.exp(y1 - 0.25 * (y0 - y2) * delta))
             modes.append((f_ref, amp_ref))
+            mode_idx.append(int(i))
 
         if not modes:
             return None
+
+        # 主模态：按幅度取最大值，并记录其在全谱中的索引，用于计算峰质量指标
+        amps = np.array([a for _, a in modes], dtype=np.float64)
+        dom_pos = int(np.argmax(amps))
+        dom_i = mode_idx[dom_pos]
+        f0 = float(modes[dom_pos][0])
+        peak_amp = float(spectrum[dom_i])
+
+        # ---- 精度置信度指标（单次敲击）----
+        # 1) 信噪比：主峰相对频带内噪声中位数（中位数对离散峰不敏感，稳健）
+        noise_floor = float(np.median(band_spec))
+        snr_db = 20.0 * np.log10(peak_amp / max(noise_floor, 1e-12))
+
+        # 2) -3dB 带宽（幅度降到 1/√2），用于衡量峰锐度/频率可分辨性
+        half_amp = peak_amp / np.sqrt(2.0)
+        li = dom_i
+        while li > 0 and spectrum[li] > half_amp:
+            li -= 1
+        ri = dom_i
+        while ri < len(spectrum) - 1 and spectrum[ri] > half_amp:
+            ri += 1
+        bandwidth = max(df, (ri - li) * df)
+        q_factor = f0 / bandwidth if bandwidth > 0 else 0.0
+
+        # 3) 与次峰的分离度：主峰与距离较远的最大竞争峰之比（dB）
+        guard = max(1, int(round(8.0 / df)))
+        others = [spectrum[i] for i in kept if abs(i - dom_i) >= guard]
+        sep_db = 20.0 * np.log10(peak_amp / max(max(others), 1e-12)) if others else 60.0
+
+        # 4) 窗口内周期数：低频模态在短窗里周期少，频率估计相对不稳
+        duration_eff = n / sr
+        cycles = duration_eff * f0
+
+        # 合成精度分：SNR 权重最高，其次峰分离度、衰减幅度、周期数
+        clip01 = lambda v: max(0.0, min(1.0, v))
+        s_snr = clip01((snr_db - 10.0) / 30.0)
+        s_sep = clip01((sep_db - 6.0) / 24.0)
+        s_decay = clip01(np.log10(max(decay_ratio, 1.0)) / 1.5)
+        s_res = clip01((cycles - 3.0) / 12.0)
+        precision = 100.0 * (0.4 * s_snr + 0.25 * s_sep + 0.2 * s_decay + 0.15 * s_res)
 
         modes.sort(key=lambda m: m[1], reverse=True)
         dominant = modes[0]
@@ -479,7 +524,16 @@ class AudioSpectrumEngine:
             'magnitude': spectrum,
             'modes': modes,
             'dominant': dominant,
-            'duration': n / sr,
+            'duration': duration_eff,
+            'metrics': {
+                'snr_db': float(snr_db),
+                'bandwidth': float(bandwidth),
+                'q_factor': float(q_factor),
+                'sep_db': float(sep_db),
+                'decay_ratio': float(decay_ratio),
+                'cycles': float(cycles),
+                'precision': float(precision),
+            },
         }
 
     def start_capture(self, stream_callback=None):
